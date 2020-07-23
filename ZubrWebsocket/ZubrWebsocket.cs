@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -21,7 +22,7 @@ namespace ZubrWebsocket
         private string _apiKey;
         private string _secret;
         private readonly HMACSHA256 _hmac = new HMACSHA256();
-
+        
 
         public static byte[] StringToByteArray(string hex)
         {
@@ -40,11 +41,12 @@ namespace ZubrWebsocket
 
         private int id = 1;
 
-       
+        private List<string> _queuedMessages;
 
         public ZubrWebsocketClient(string apiKey, string apiSecret)
         {
             SetCredentials(apiKey, apiSecret);
+            _queuedMessages = new List<string>();
             _ws = new WebSocket(wsAddress);
             _ws.Log.Level = LogLevel.Trace;
 
@@ -76,7 +78,7 @@ namespace ZubrWebsocket
         {
             if (!Connected)
             {
-                loggedIn = false;
+                _loggedIn = false;
                 _ws.Connect();
             }
             Console.WriteLine("---------------------------------------Sending------------------------------------------");
@@ -85,14 +87,25 @@ namespace ZubrWebsocket
             _ws.Send(msg);
         }
 
-        DateTime nextPingTime = DateTime.MaxValue;
+        public void SendAfterLogin(string msg)
+        {
+            if (loggedIn)
+            {
+                Send(msg);
+            }
+            else
+            {
+                _queuedMessages.Add(msg);
+            }
+        }
+
+
+        private int loginMessageId = -1;
 
         public void Login()
         {
             var timestamp = Math.Round((DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1))).TotalSeconds).ToString();
             string preHash = string.Format("key={0};time={1}", _apiKey, timestamp);
-            //string preHash = "key=3ochCJvpuZV4NKKRN6G71u;time=1595423007";
-            //string hash = "97bbcdd364fac2f60488e48801ce7f19e5c45f28773b58c8e9741ab65aa0bf26";
             var data = Encoding.UTF8.GetBytes(preHash);
          
             var dataSigned = _hmac.ComputeHash(data);
@@ -102,12 +115,11 @@ namespace ZubrWebsocket
                 sb.AppendFormat("{0:x2}", b);
             }
             var signString = sb.ToString();
-
-            //var signString = System.Convert.ToBase64String(dataSigned);
             
             string msgStrBase = @"{{""method"":9,""params"":{{""data"":{{""method"":""loginSessionByApiToken"",""params"":{{""apiKey"":""{0}"",""time"":{{""seconds"":{1},""nanos"":{2}}},""hmacDigest"":""{3}""}}}}}},""id"":{4}}}";
             
-            string msgStr = string.Format(msgStrBase, _apiKey, timestamp, 0, signString, id++);
+            string msgStr = string.Format(msgStrBase, _apiKey, timestamp, 0, signString, id);
+            loginMessageId = id++;
             Send(msgStr);
         }
 
@@ -117,21 +129,91 @@ namespace ZubrWebsocket
             throw new Exception(e.Message);
         }
 
+        public void PlaceOrder(int instrument_id, double price, int size, Side side, OrderType type, TimeInForce timeInForce)
+        {
+            string msgStrBase = @"{{""method"":9,""params"":{{""data"":{{""method"":""placeOrder"",""params"":{{""instrument"":{0},""price"":{{""mantissa"":{1},""exponent"":{2}}},""size"":{3},""type"":""{4}"",""timeInForce"":""{5}"",""side"":""{6}""}}}}}},""id"":{7}}}";
+            string typeStr = Enum.GetName(typeof(OrderType), type);
+            string sideStr = Enum.GetName(typeof(Side), side);
+            string tifStr = Enum.GetName(typeof(TimeInForce), timeInForce);
+            long mantissa = 0;
+            int exponent = 0;
+            GetMantissaAndExponent(price, ref mantissa, ref exponent);
+            string msgStr = string.Format(msgStrBase, instrument_id, mantissa, exponent, size, typeStr, tifStr, sideStr, id++);
+            SendAfterLogin(msgStr);
+        }
 
 
-        public bool loggedIn { get; set; } = false;
+        public void ReplaceOrder(long orderId, double price, int size)
+        {
+            string msgStrBase = @"{{""method"":9,""params"":{{""data"":{{""method"":""replaceOrder"",""params"":{{""orderId"":{0},""price"":{{""mantissa"":{1},""exponent"":{2}}},""size"":{3}}}}}}},""id"":{4}}}";
+            long mantissa = 0;
+            int exponent = 0;
+            GetMantissaAndExponent(price, ref mantissa, ref exponent);
+            string msgStr = string.Format(msgStrBase, orderId, mantissa, exponent, size,  id++);
+            SendAfterLogin(msgStr);
+        }
+
+        public void CancelOrder(long orderId)
+        {
+            string msgStrBase = @"{{""method"":9,""params"":{{""data"":{{""method"":""cancelOrder"",""params"":{0}}}}},""id"":{1}}}";
+            string msgStr = string.Format(msgStrBase, orderId, id++);
+            SendAfterLogin(msgStr);
+        }
+
+        
+
+        private void GetMantissaAndExponent(double price, ref long mantissa, ref int exponent)
+        {
+            StringBuilder sbMantissa = new StringBuilder();
+            var priceStr = price.ToString();
+            bool decimalFound = false;
+            int decimalCount = 0;
+            for (int i = 0; i < priceStr.Length; i++)
+            {
+                if (priceStr[i] != '.')
+                {
+                    sbMantissa.Append(priceStr[i]);
+                    if (decimalFound)
+                    {
+                        decimalCount++;
+                    }
+                }
+                else
+                {
+                    decimalFound = true;
+                }
+            }
+            mantissa = long.Parse(sbMantissa.ToString());
+            exponent = -1 * decimalCount;
+        }
+
+        private bool _loggedIn = false;
+        public bool loggedIn { get { return _loggedIn; } } 
 
         private void _ws_OnMessage(object sender, MessageEventArgs e)
         {
-            nextPingTime = DateTime.Now.AddSeconds(15);
             Console.WriteLine("---------------------------------------Received------------------------------------------");
             Console.WriteLine(e.Data);
-            Console.WriteLine("---------------------------------------Received------------------------------------------"); ;                
+            Console.WriteLine("---------------------------------------Received------------------------------------------"); ;
+            ProcessMessage(e.Data);
         }
 
-        public void Connect()
+        private void ProcessMessage(string msg)
         {
-            _ws.Connect();
+            var jt = JToken.Parse(msg);
+            if (jt.Value<int>("id") == loginMessageId)
+            {
+                _loggedIn = jt["result"].Value<string>("tag") == "ok";
+                if (_loggedIn)
+                {
+                    while (_queuedMessages.Count > 0)
+                    {
+                        string msgOut = _queuedMessages[0];
+                        _queuedMessages.RemoveAt(0);
+                        Send(msgOut);
+                    }
+                }                
+            }
         }
     }
 }

@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Newtonsoft.Json.Linq;
+using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using ZubrWebsocket;
@@ -9,10 +11,17 @@ namespace ZubRobot
     {
         static void Main(string[] args)
         {
+            string configStr = File.ReadAllText("config.json");
+            JToken config = JToken.Parse(configStr);
 
-            var ws = new ZubrWebsocketClient("3ochCJvpuZV4NKKRN6G71u", "00ea2a26932165e473445effdc2a740549245a4ea2e30fd841721fb40a67b9f2");
+            var ws = new ZubrWebsocketClient(config.Value<string>("apiKey"), config.Value<string>("apiSecret"));
             ws.Login();
-            
+            ws.PlaceOrder(1, 10000.5, 1, Side.SELL, OrderType.LIMIT, TimeInForce.GTC);
+
+            //long orderId = 4512734125362872;
+            //ws.ReplaceOrder(orderId, 9999, 1);
+
+            //ws.CancelOrder(orderId);
 
             while (true)
             {
