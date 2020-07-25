@@ -22,4 +22,15 @@ namespace ZubrWebsocket
         IOC,
         FOK
     }
+
+    public enum Channel
+    {
+        orders,
+        orderFills,
+        lasttrades,
+        orderbook,
+        tickers,
+        instruments,
+        positions
+    }
 }
