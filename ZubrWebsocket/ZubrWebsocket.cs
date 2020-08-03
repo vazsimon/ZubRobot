@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
@@ -214,7 +215,7 @@ namespace ZubrWebsocket
         private void GetMantissaAndExponent(decimal price, ref long mantissa, ref int exponent)
         {
             StringBuilder sbMantissa = new StringBuilder();
-            var priceStr = price.ToString();
+            var priceStr = price.ToString(CultureInfo.InvariantCulture);
             bool decimalFound = false;
             int decimalCount = 0;
             for (int i = 0; i < priceStr.Length; i++)
