@@ -1,4 +1,15 @@
 ﻿{
-  "apiKey": "your api key",
-  "apiSecret": "your api secret"
+  "apiKey": "YourApiKEY",
+  "apiSecret": "YourApiSecret",
+  "apiEndpoint": "wss://uat.zubr.io/api/v1/ws",
+  "InstrumentCode": 1,
+  "QuoteSize": 1,
+  "Interest": 30,
+  "Shift": 1,
+  "MaxPosition": 5,
+  "InitialPosition": -2,
+  "InitialPositionFromConfig": true,
+  "LogTransport": false,
+  "LogLogicalEvents": true,
+  "MinTickSize" :  0.5
 }

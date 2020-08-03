@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
@@ -18,7 +19,7 @@ namespace ZubrWebsocket
     public class ZubrWebsocketClient
     {
 
-        private const string wsAddress = @"wss://uat.zubr.io/api/v1/ws";
+        private string _wsAddress = @"wss://uat.zubr.io/api/v1/ws";
 
         public event EventHandler<OrdersUpdate> Orders;
         public event EventHandler<OrderFillsUpdate> OrderFills;
@@ -26,10 +27,13 @@ namespace ZubrWebsocket
         public event EventHandler<PositionsUpdate> Positions;
         public event EventHandler<OrderbookUpdate> Orderbook;
         public event EventHandler<TickersUpdate> Tickers;
-
+        
 
         private WebSocket _ws;
         public bool Connected { get { return _ws.IsAlive; } }
+        public List<string> Permissions { get; set; }
+        public bool LogTransport { get; set; }
+
 
         private string _apiKey;
         private string _secret;
@@ -67,10 +71,11 @@ namespace ZubrWebsocket
         /// <param name="apiSecret"></param>
         public ZubrWebsocketClient(string apiKey, string apiSecret)
         {
+            Permissions = new List<string>();
             SetCredentials(apiKey, apiSecret);
             _queuedMessages = new List<string>();
-            _ws = new WebSocket(wsAddress);
-            _ws.Log.Level = LogLevel.Trace;
+            _ws = new WebSocket(_wsAddress);
+            
 
             _ws.SslConfiguration.EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12;
             _ws.EmitOnPing = true;
@@ -96,6 +101,13 @@ namespace ZubrWebsocket
 
 
 
+        public ZubrWebsocketClient(string apiKey, string apiSecret, string endpoint): this(apiKey, apiSecret)
+        {
+            _wsAddress = endpoint;
+        }
+
+
+
         private void Send(string msg)
         {
             if (!Connected)
@@ -103,9 +115,12 @@ namespace ZubrWebsocket
                 LoggedIn = false;
                 _ws.Connect();
             }
-            Console.WriteLine("---------------------------------------Sending------------------------------------------");
-            Console.WriteLine(msg);
-            Console.WriteLine("---------------------------------------Sending------------------------------------------");
+            if (LogTransport)
+            {
+                Console.WriteLine("---------------------------------------Sending------------------------------------------");
+                Console.WriteLine(msg);
+                Console.WriteLine("---------------------------------------Sending------------------------------------------");
+            }            
             _ws.Send(msg);
         }
 
@@ -230,9 +245,12 @@ namespace ZubrWebsocket
         /// <param name="e"></param>
         private void _ws_OnMessage(object sender, MessageEventArgs e)
         {
-            Console.WriteLine("---------------------------------------Received------------------------------------------");
-            Console.WriteLine(e.Data);
-            Console.WriteLine("---------------------------------------Received------------------------------------------"); ;
+            if (LogTransport)
+            {
+                Console.WriteLine("---------------------------------------Received------------------------------------------");
+                Console.WriteLine(e.Data);
+                Console.WriteLine("---------------------------------------Received------------------------------------------"); ;
+            }            
             ProcessMessage(e.Data);
         }
 
@@ -295,7 +313,7 @@ namespace ZubrWebsocket
                     var position = item.First();
                     PositionsUpdate t = new PositionsUpdate
                     {
-                        InstrumentId = position.Value<int>("instrument"),
+                        InstrumentId = position.Value<int>("instrumentId"),
                         AccountId = position.Value<long>("accountId"),
                         Size = position.Value<decimal>("size"),
                         CurrentNotionalValue = GetDecimal(position["currentNotionalValue"]),
@@ -577,16 +595,27 @@ namespace ZubrWebsocket
         private void ProcessLoginResponse(JToken jt)
         {
             //Response for login request. We have to also check authorization for trading
-            LoggedIn = jt["result"].Value<string>("tag") == "ok";
+            bool ok = jt["result"].Value<string>("tag") == "ok";            
+
             //Handle the messages enqueued for not being logged in yet
-            if (LoggedIn)
+            if (ok)
             {
+                Permissions.Clear();
+                foreach (var permission in jt["result"]["value"]["permissions"])
+                {
+                    Permissions.Add(permission.ToString());
+                }
+                LoggedIn = true;
                 while (_queuedMessages.Count > 0)
                 {
                     string msgOut = _queuedMessages[0];
                     _queuedMessages.RemoveAt(0);
                     Send(msgOut);
                 }
+            }
+            else
+            {
+                LoggedIn = false;
             }
         }
 
