@@ -309,7 +309,7 @@ namespace ZubRobot
         /// <param name="e"></param>
         private static void Ws_OrderFillsUpdate(object sender, ZubrWebsocket.Models.OrderFillsUpdate e)
         {
-            if (e.InstrumentId == instrumentCode)
+            if (e.InstrumentId == instrumentCode && !e.IsSnapshot)
             {
                 if (e.Side == Side.BUY)
                 {
@@ -413,7 +413,7 @@ namespace ZubRobot
                 positionInitialised = true;
                 if (logLogic)
                 {
-                    Console.WriteLine("Initial position read from exhange");
+                    Console.WriteLine(string.Format("Initial position read from exhange : {0}",position));
                 }
             }
         }
