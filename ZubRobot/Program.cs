@@ -38,6 +38,12 @@ namespace ZubRobot
         private static decimal lastSellPrice = -1;
 
         private static ZubrWebsocketClient ws;
+        private static Dictionary<int, long> orderIdMappingsBuy = new Dictionary<int, long>();
+        private static Dictionary<int, long> orderIdMappingsSell = new Dictionary<int, long>();
+        public static bool HasActiveOrdersBuy { get { return orderIdMappingsBuy.Count(X => X.Value > -1) > 0 ; } }
+        public static bool HasActiveOrdersSell { get { return orderIdMappingsSell.Count(X => X.Value > -1) > 0; } }
+        public static bool HasPendingOrdersBuy { get { return orderIdMappingsBuy.Count(X => X.Value == -1) > 0; } }
+        public static bool HasPendingOrdersSell { get { return orderIdMappingsSell.Count(X => X.Value == -1) > 0; } }
 
 
 
@@ -114,6 +120,7 @@ namespace ZubRobot
             ws.OrderFills += Ws_OrderFillsUpdate;
             ws.Orderbook += Ws_OrderbookUpdate;
             ws.Orders += Ws_OrdersUpdate;
+            ws.OrderConfirmations += WS_OrderConfirmationsUpdate;
 
             ws.Subscribe(Channel.tickers);
             ws.Subscribe(Channel.orderFills);
@@ -154,6 +161,41 @@ namespace ZubRobot
             }
         }
 
+        private static void WS_OrderConfirmationsUpdate(object sender, ZubrWebsocket.Models.OrderConfirmationUpdate e)
+        {
+            lock (orderUpdateLock)
+            {
+                if (e.OK)
+                {
+                    if (orderIdMappingsBuy.ContainsKey(e.ClOrderId))
+                    {
+                        orderIdMappingsBuy[e.ClOrderId] = e.OrderId;
+                    }
+                    else if (orderIdMappingsSell.ContainsKey(e.ClOrderId))
+                    {
+                        orderIdMappingsSell[e.ClOrderId] = e.OrderId;
+                    }
+                    else
+                    {
+                        throw new Exception("ERROR - Order was created outside of the system");
+                    }
+                }
+                else
+                {
+                    //Remove reference for order, it was not created right
+                    if (orderIdMappingsBuy.ContainsKey(e.ClOrderId))
+                    {
+                        orderIdMappingsBuy.Remove(e.ClOrderId);
+                    }
+                    else if (orderIdMappingsSell.ContainsKey(e.ClOrderId))
+                    {
+                        orderIdMappingsSell.Remove(e.ClOrderId);
+                    }
+                }
+            }            
+            
+        }
+
         private static decimal tickRnd(decimal d)
         {
             var mod = d % minTickSize;
@@ -177,9 +219,10 @@ namespace ZubRobot
             {
                 decimal buyPrice = tickRnd( ((bestBid + bestAsk) / 2) - interest - shift * position);
                 decimal sellPrice = tickRnd( ((bestBid + bestAsk) / 2) + interest - shift * position);
-                ws.PlaceOrder(instrumentCode, buyPrice, volume, Side.BUY, OrderType.LIMIT, TimeInForce.GTC);
+                orderIdMappingsBuy.Add(ws.PlaceOrder(instrumentCode, buyPrice, volume, Side.BUY, OrderType.LIMIT, TimeInForce.GTC), -1);
                 lastBuyPrice = buyPrice;
-                ws.PlaceOrder(instrumentCode, sellPrice, volume, Side.SELL, OrderType.LIMIT, TimeInForce.GTC);
+                orderIdMappingsSell.Add(ws.PlaceOrder(instrumentCode, sellPrice, volume, Side.SELL, OrderType.LIMIT, TimeInForce.GTC), -1);
+                
                 lastSellPrice = sellPrice;
                 if (logLogic)
                 {
@@ -188,9 +231,7 @@ namespace ZubRobot
             }            
         }
 
-        private static long buyOrderId = -1;
         private static bool buyReplaceNeeded = false;
-        private static long sellOrderId = -1;
         private static bool sellReplaceNeeded = false;
 
 
@@ -201,52 +242,60 @@ namespace ZubRobot
         /// <param name="e"></param>
         private static void Ws_OrdersUpdate(object sender, ZubrWebsocket.Models.OrdersUpdate e)
         {
-            if (!e.IsSnapshot && e.InstrumentId == instrumentCode)
+            lock (orderUpdateLock)
             {
-                if (e.Status == "FILLED" || e.Status == "CANCELLED")
+                if (!e.IsSnapshot && e.InstrumentId == instrumentCode)
                 {
-                    if (e.Side == Side.BUY)
+
+                    if (e.Status == "CANCELLED")
                     {
-                        buyOrderId = 0;
+                        if (e.Side == Side.BUY)
+                        {
+                            var index = orderIdMappingsBuy.Where(X => X.Value == e.OrderId).FirstOrDefault().Key;
+                            orderIdMappingsBuy.Remove(index);
+                        }
+                        else
+                        {
+                            var index = orderIdMappingsSell.Where(X => X.Value == e.OrderId).FirstOrDefault().Key;
+                            orderIdMappingsSell.Remove(index);
+                        }
                     }
-                    else
+                    else if(e.Status == "FILLED")
                     {
-                        sellOrderId = 0;
+                        if (e.Side == Side.BUY)
+                        {
+                            var index = orderIdMappingsBuy.Where(X => X.Value == e.OrderId).FirstOrDefault().Key;
+                            orderIdMappingsBuy.Remove(index);
+                            buyReplaceNeeded = true;
+                        }
+                        else
+                        {
+                            var index = orderIdMappingsSell.Where(X => X.Value == e.OrderId).FirstOrDefault().Key;
+                            orderIdMappingsSell.Remove(index);
+                            sellReplaceNeeded = true;
+                        }
+                    }
+                    else if(e.Status == "PARTIALLY_FILLED")
+                    {
+                        if (e.Side == Side.BUY)
+                        {
+                            buyReplaceNeeded = true;
+                        }
+                        else
+                        {
+                            sellReplaceNeeded = true;
+                        }
+                    }
+                    if (logLogic)
+                    {
+                        Console.WriteLine(string.Format("OrderUpdate received - {0}", e.Status));
                     }
                 }
-                else if (e.Status == "PARTIALLY_FILLED")
+                else
                 {
-                    if (e.Side == Side.BUY)
-                    {
-                        buyOrderId = e.OrderId;
-                        buyReplaceNeeded = true;
-                    }
-                    else
-                    {
-                        sellOrderId = e.OrderId;
-                        sellReplaceNeeded = true;
-                    }
+                    orderSnapshotReceived = true;
                 }
-                else if (e.Status == "NEW")
-                {
-                    if (e.Side == Side.BUY)
-                    {
-                        buyOrderId = e.OrderId;
-                    }
-                    else
-                    {
-                        sellOrderId = e.OrderId;
-                    }
-                }
-                if (logLogic)
-                {
-                    Console.WriteLine("OrderUpdate received");
-                }
-            }
-            else
-            {
-                orderSnapshotReceived = true;
-            }
+            }            
         }
 
         private static Dictionary<decimal, decimal> asks = new Dictionary<decimal, decimal>();
@@ -309,21 +358,24 @@ namespace ZubRobot
         /// <param name="e"></param>
         private static void Ws_OrderFillsUpdate(object sender, ZubrWebsocket.Models.OrderFillsUpdate e)
         {
-            if (e.InstrumentId == instrumentCode && !e.IsSnapshot)
+            lock (orderUpdateLock)
             {
-                if (e.Side == Side.BUY)
+                if (e.InstrumentId == instrumentCode && !e.IsSnapshot)
                 {
-                    position += e.TradeQty;
+                    if (e.Side == Side.BUY)
+                    {
+                        position += e.TradeQty;
+                    }
+                    else
+                    {
+                        position -= e.TradeQty;
+                    }
+                    if (logLogic)
+                    {
+                        Console.WriteLine(string.Format("Fill received, position : {0}", position));
+                    }
                 }
-                else
-                {
-                    position -= e.TradeQty;
-                }
-                if (logLogic)
-                {
-                    Console.WriteLine(string.Format("Fill received, position : {0}",position));
-                }
-            }
+            }            
         }
 
 
@@ -348,7 +400,7 @@ namespace ZubRobot
             };
         }
 
-
+        private static object orderUpdateLock = new object();
         /// <summary>
         /// We re-post the orders if one of the conditions are met
         /// - previous order got filled (signalled by buyOrderId = 0 or sellOrderId = 0) , posting new one
@@ -357,45 +409,52 @@ namespace ZubRobot
         /// </summary>
         private static void RefreshOpenOrders()
         {
-            if (maxPosition - Math.Abs(position) > 0)
+            lock (orderUpdateLock)
             {
-                decimal buyPrice = tickRnd( ((bestBid + bestAsk) / 2) - interest - shift * position);
-                decimal sellPrice = tickRnd( ((bestBid + bestAsk) / 2) + interest - shift * position);
-                if ((buyPrice != lastBuyPrice || buyReplaceNeeded) && buyOrderId > -1)
+                if (maxPosition - Math.Abs(position) > 0)
                 {
-                    buyReplaceNeeded = false;
-                    if (buyOrderId > 0)
+                    //only one thread can handle the update to prevent double order placement
+
+                    decimal buyPrice = tickRnd(((bestBid + bestAsk) / 2) - interest - shift * position);
+                    decimal sellPrice = tickRnd(((bestBid + bestAsk) / 2) + interest - shift * position);
+                    if ((buyPrice != lastBuyPrice || buyReplaceNeeded) && !HasPendingOrdersBuy)
                     {
-                        ws.ReplaceOrder(buyOrderId, buyPrice, volume);
+                        buyReplaceNeeded = false;
+                        //cancelling old, not using replace to avoid race conditions with late fills
+                        //cancelling all that not cancelled yet and received ack for from exhange (to circumvent late acknowledgements if that happens)
+                        var ordersToCancel = orderIdMappingsBuy.Where(X => X.Value > -1); 
+                        foreach (var order in ordersToCancel)
+                        {
+                            ws.CancelOrder(order.Value);
+                            orderIdMappingsBuy.Remove(order.Key);
+                        }
+                        //Ensuring no other order placements happen until acknowledgement, adding it to mapping with -1                         
+                        orderIdMappingsBuy.Add(ws.PlaceOrder(instrumentCode, buyPrice, volume, Side.BUY, OrderType.LIMIT, TimeInForce.GTC), -1);
+                        lastBuyPrice = buyPrice;
+                        if (logLogic)
+                        {
+                            Console.WriteLine(string.Format("Order replaced -- buy at {0}, volume:{1}", lastBuyPrice, volume));
+                        }
                     }
-                    else
+                    if ((sellPrice != lastSellPrice || sellReplaceNeeded) && !HasPendingOrdersSell)
                     {
-                        ws.PlaceOrder(instrumentCode, buyPrice, volume, Side.BUY, OrderType.LIMIT, TimeInForce.GTC);
-                    }
-                    lastBuyPrice = buyPrice;
-                    if (logLogic)
-                    {
-                        Console.WriteLine(string.Format("Order replaced -- buy at {0}, volume:{1}", lastBuyPrice,  volume));
+                        sellReplaceNeeded = false;
+                        var ordersToCancel = orderIdMappingsSell.Where(X => X.Value > -1);
+                        foreach (var order in ordersToCancel)
+                        {
+                            ws.CancelOrder(order.Value);
+                            orderIdMappingsSell.Remove(order.Key);
+                        }
+                        //Ensuring no other order placements happen until acknowledgement, adding it to mapping with -1                         
+                        orderIdMappingsSell.Add(ws.PlaceOrder(instrumentCode, sellPrice, volume, Side.SELL, OrderType.LIMIT, TimeInForce.GTC), -1);
+                        lastSellPrice = sellPrice;
+                        if (logLogic)
+                        {
+                            Console.WriteLine(string.Format("Order replaced -- sell at {0}, volume:{1}", lastSellPrice, volume));
+                        }                        
                     }
                 }
-                if ((sellPrice != lastSellPrice || sellReplaceNeeded) && sellOrderId > -1)
-                {
-                    sellReplaceNeeded = false;
-                    if (sellOrderId > 0)
-                    {
-                        ws.ReplaceOrder(sellOrderId, sellPrice, volume);
-                    }
-                    else
-                    {
-                        ws.PlaceOrder(instrumentCode, sellPrice, volume, Side.SELL, OrderType.LIMIT, TimeInForce.GTC);
-                    }
-                    lastSellPrice = sellPrice;
-                    if (logLogic)
-                    {
-                        Console.WriteLine(string.Format("Order replaced -- sell at {0}, volume:{1}", lastSellPrice, volume));
-                    }
-                }                
-            }            
+            }                
         }
 
         

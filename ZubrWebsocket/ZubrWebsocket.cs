@@ -28,7 +28,8 @@ namespace ZubrWebsocket
         public event EventHandler<PositionsUpdate> Positions;
         public event EventHandler<OrderbookUpdate> Orderbook;
         public event EventHandler<TickersUpdate> Tickers;
-        
+        public event EventHandler<OrderConfirmationUpdate> OrderConfirmations;
+
 
         private WebSocket _ws;
         public bool Connected { get { return _ws.IsAlive; } }
@@ -63,6 +64,7 @@ namespace ZubrWebsocket
         private int id = 1;
 
         private List<string> _queuedMessages;
+        private Dictionary<int, long> _orderIdMappings;
 
 
         /// <summary>
@@ -75,6 +77,7 @@ namespace ZubrWebsocket
             Permissions = new List<string>();
             SetCredentials(apiKey, apiSecret);
             _queuedMessages = new List<string>();
+            _orderIdMappings = new Dictionary<int, long>();
             _ws = new WebSocket(_wsAddress);
             
 
@@ -173,7 +176,7 @@ namespace ZubrWebsocket
             throw new Exception(e.Message);
         }
 
-        public void PlaceOrder(int instrument_id, decimal price, int size, Side side, OrderType type, TimeInForce timeInForce)
+        public int PlaceOrder(int instrument_id, decimal price, int size, Side side, OrderType type, TimeInForce timeInForce)
         {
             string msgStrBase = @"{{""method"":9,""params"":{{""data"":{{""method"":""placeOrder"",""params"":{{""instrument"":{0},""price"":{{""mantissa"":{1},""exponent"":{2}}},""size"":{3},""type"":""{4}"",""timeInForce"":""{5}"",""side"":""{6}""}}}}}},""id"":{7}}}";
             string typeStr = Enum.GetName(typeof(OrderType), type);
@@ -182,8 +185,11 @@ namespace ZubrWebsocket
             long mantissa = 0;
             int exponent = 0;
             GetMantissaAndExponent(price, ref mantissa, ref exponent);
-            string msgStr = string.Format(msgStrBase, instrument_id, mantissa, exponent, size, typeStr, tifStr, sideStr, id++);
+            int currentId = id++;
+            _orderIdMappings[currentId] = -1;
+            string msgStr = string.Format(msgStrBase, instrument_id, mantissa, exponent, size, typeStr, tifStr, sideStr, currentId);
             SendAfterLogin(msgStr);
+            return currentId;
         }
 
 
@@ -262,9 +268,14 @@ namespace ZubrWebsocket
         private void ProcessMessage(string msg)
         {
             var jt = JToken.Parse(msg);
-            if (jt.Value<int>("id") == loginMessageId)
+            var msgId = jt.Value<int>("id");
+            if (msgId == loginMessageId)
             {
                 ProcessLoginResponse(jt);                                
+            }
+            if (_orderIdMappings.ContainsKey(msgId))
+            {
+                ProcessOrderCreationResponse(jt);
             }
 
             if (jt["result"] != null && !string.IsNullOrEmpty(jt["result"].Value<string>("channel")))
@@ -297,6 +308,23 @@ namespace ZubrWebsocket
                     }
                 }
             }
+        }
+
+        private void ProcessOrderCreationResponse(JToken jt)
+        {
+            var clOrderId = jt.Value<int>("id");
+            var ok = jt["result"].Value<string>("tag") == "ok";
+            
+            OrderConfirmationUpdate t = new OrderConfirmationUpdate
+            {
+                ClOrderId = jt.Value<int>("id"),
+                OK = ok
+            };
+            if (ok)
+            {
+                t.OrderId = jt["result"].Value<long>("value");
+            }
+            OrderConfirmations?.Invoke(this, t);
         }
 
 
@@ -438,7 +466,7 @@ namespace ZubrWebsocket
                         Price = GetDecimal(order["price"]),
                         CreationTime = GetTimeUTC(order["creationTime"]),
                         UpdateTime = GetTimeUTC(order["updateTime"]),
-                        IsSnapshot = true
+                        IsSnapshot = true,
                     };
                     Orders?.Invoke(this, t);
                 }
