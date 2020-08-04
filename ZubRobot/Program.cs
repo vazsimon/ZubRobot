@@ -437,20 +437,20 @@ namespace ZubRobot
                         {
                             Console.WriteLine(string.Format("Order replaced -- buy at {0}, volume:{1}", lastBuyPrice, volume));
                         }
-                    }
-                    else
+                    }                    
+                }
+                else
+                {
+                    //Cancel all outstanding buys, if any
+                    var ordersToCancel = orderIdMappingsBuy.Where(X => X.Value > -1);
+                    foreach (var order in ordersToCancel)
                     {
-                        //Cancel all outstanding buys, if any
-                        var ordersToCancel = orderIdMappingsBuy.Where(X => X.Value > -1);
-                        foreach (var order in ordersToCancel)
-                        {
-                            ws.CancelOrder(order.Value);
-                            orderIdMappingsBuy.Remove(order.Key);
-                        }
-                        if (logLogic)
-                        {
-                            Console.WriteLine("MAx position reached -- buy disabled, orders cancelled");
-                        }
+                        ws.CancelOrder(order.Value);
+                        orderIdMappingsBuy.Remove(order.Key);
+                    }
+                    if (logLogic)
+                    {
+                        Console.WriteLine("MAx position reached -- buy disabled, orders cancelled");
                     }
                 }
 
