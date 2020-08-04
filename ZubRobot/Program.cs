@@ -3,6 +3,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ZubrWebsocket;
@@ -151,6 +153,10 @@ namespace ZubRobot
                 Console.WriteLine("Order snapshots received");
             }
 
+
+            AppDomain.CurrentDomain.ProcessExit += new EventHandler(CurrentDomain_ProcessExit);
+            Console.CancelKeyPress += new ConsoleCancelEventHandler(CurrentDomain_ProcessExit);
+
             InitOrders();
 
 
@@ -158,6 +164,23 @@ namespace ZubRobot
             {
                 //do everything on other threads, we just can't let the main thread exit
                 Thread.Sleep(100);
+            }
+        }
+
+        private static void CurrentDomain_ProcessExit(object sender, EventArgs e)
+        {
+            Console.WriteLine("EXITING");
+            var ordersToCancel = orderIdMappingsBuy.Where(X => X.Value > -1);
+            foreach (var order in ordersToCancel)
+            {
+                ws.CancelOrder(order.Value);
+                orderIdMappingsBuy.Remove(order.Key);
+            }
+            ordersToCancel = orderIdMappingsSell.Where(X => X.Value > -1);
+            foreach (var order in ordersToCancel)
+            {
+                ws.CancelOrder(order.Value);
+                orderIdMappingsSell.Remove(order.Key);
             }
         }
 
@@ -540,6 +563,7 @@ namespace ZubRobot
             }
             return ok;
         }
-       
+                
+
     }
 }

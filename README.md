@@ -30,3 +30,9 @@ After a Visual Studio build, the config file will be copied to the output direct
 - Log Transport messages to exhange - Log messages sent and received from the exhange
 - Log logical events - Log events happening in the robot's business logic
 - The minimum tick size of the instrument - the robot will round the calculated prices to comply with the minimum tick size
+
+---
+**Disclaimer**
+
+This robot is only for educational purposes, to serve as a base for a market maker bot. For a real trading bot, you have to implement a feasible logic and trading strategy.
+
