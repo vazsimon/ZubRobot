@@ -337,6 +337,11 @@ namespace ZubrWebsocket
             var payload = jt["result"]["data"]["value"]["payload"];
             if (jt["result"]["data"]["value"].Value<string>("type") == "snapshot")
             {
+                if (payload.Count() == 0)
+                {
+                    //We have no position at all
+                    Positions?.Invoke(this, null);
+                }
                 foreach (var item in payload)
                 {
                     var position = item.First();

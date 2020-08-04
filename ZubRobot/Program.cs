@@ -411,18 +411,20 @@ namespace ZubRobot
         {
             lock (orderUpdateLock)
             {
-                if (maxPosition - Math.Abs(position) > 0)
-                {
-                    //only one thread can handle the update to prevent double order placement
 
-                    decimal buyPrice = tickRnd(((bestBid + bestAsk) / 2) - interest - shift * position);
-                    decimal sellPrice = tickRnd(((bestBid + bestAsk) / 2) + interest - shift * position);
+                //only one thread can handle the update to prevent double order placement
+
+                decimal buyPrice = tickRnd(((bestBid + bestAsk) / 2) - interest - shift * position);
+                decimal sellPrice = tickRnd(((bestBid + bestAsk) / 2) + interest - shift * position);
+                if (maxPosition > position)
+                {
+                    //We are in the limit with the buys, buy order can go out
                     if ((buyPrice != lastBuyPrice || buyReplaceNeeded) && !HasPendingOrdersBuy)
                     {
                         buyReplaceNeeded = false;
                         //cancelling old, not using replace to avoid race conditions with late fills
                         //cancelling all that not cancelled yet and received ack for from exhange (to circumvent late acknowledgements if that happens)
-                        var ordersToCancel = orderIdMappingsBuy.Where(X => X.Value > -1); 
+                        var ordersToCancel = orderIdMappingsBuy.Where(X => X.Value > -1);
                         foreach (var order in ordersToCancel)
                         {
                             ws.CancelOrder(order.Value);
@@ -436,6 +438,25 @@ namespace ZubRobot
                             Console.WriteLine(string.Format("Order replaced -- buy at {0}, volume:{1}", lastBuyPrice, volume));
                         }
                     }
+                    else
+                    {
+                        //Cancel all outstanding buys, if any
+                        var ordersToCancel = orderIdMappingsBuy.Where(X => X.Value > -1);
+                        foreach (var order in ordersToCancel)
+                        {
+                            ws.CancelOrder(order.Value);
+                            orderIdMappingsBuy.Remove(order.Key);
+                        }
+                        if (logLogic)
+                        {
+                            Console.WriteLine("MAx position reached -- buy disabled, orders cancelled");
+                        }
+                    }
+                }
+
+                if (-1 * maxPosition < position)
+                {
+                    //we still can sell some more to reach the limit
                     if ((sellPrice != lastSellPrice || sellReplaceNeeded) && !HasPendingOrdersSell)
                     {
                         sellReplaceNeeded = false;
@@ -451,10 +472,24 @@ namespace ZubRobot
                         if (logLogic)
                         {
                             Console.WriteLine(string.Format("Order replaced -- sell at {0}, volume:{1}", lastSellPrice, volume));
-                        }                        
+                        }
                     }
                 }
-            }                
+                else
+                {
+                    //cancel all sells
+                    var ordersToCancel = orderIdMappingsSell.Where(X => X.Value > -1);
+                    foreach (var order in ordersToCancel)
+                    {
+                        ws.CancelOrder(order.Value);
+                        orderIdMappingsSell.Remove(order.Key);
+                    }
+                    if (logLogic)
+                    {
+                        Console.WriteLine("MAx position reached -- sell disabled, orders cancelled");
+                    }
+                }
+            }             
         }
 
         
@@ -465,16 +500,23 @@ namespace ZubRobot
         /// <param name="sender"></param>
         /// <param name="e"></param>
         private static void Ws_PositionsInit(object sender, ZubrWebsocket.Models.PositionsUpdate e)
-        {            
-            if (e.InstrumentId == instrumentCode)
+        {
+            if (e == null)
             {
-                position = e.Size;
                 positionInitialised = true;
-                if (logLogic)
-                {
-                    Console.WriteLine(string.Format("Initial position read from exhange : {0}",position));
-                }
             }
+            else
+            {
+                if (e.InstrumentId == instrumentCode)
+                {
+                    position = e.Size;
+                    positionInitialised = true;
+                    if (logLogic)
+                    {
+                        Console.WriteLine(string.Format("Initial position read from exhange : {0}", position));
+                    }
+                }
+            }            
         }
 
 
